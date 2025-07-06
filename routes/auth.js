@@ -19,100 +19,31 @@ const validateLogin = [
 const asyncHandler = (fn) => (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
 };
-
 // Verify session and return user data
 router.get('/verify', asyncHandler(async (req, res) => {
-    console.log('Verify request received', {
-        sessionID: req.sessionID,
-        cookies: req.headers.cookie,
-        session: req.session ? {
-            id: req.session.id,
-            userId: req.session.userId,
-            email: req.session.email
-        } : 'no session'
-    });
-
-    // Extract session ID from cookie if not in req.sessionID
-    let sessionId = req.sessionID;
-    if (!sessionId && req.headers.cookie) {
-        const cookies = req.headers.cookie.split(';');
-        const sessionCookie = cookies.find(cookie => cookie.trim().startsWith('connect.sid='));
-        if (sessionCookie) {
-            sessionId = sessionCookie.split('=')[1].trim();
-            // Remove the 's:' prefix and everything after the first dot if present
-            sessionId = sessionId.replace(/^s:/, '').split('.')[0];
-            console.log('Extracted session ID from cookie:', sessionId);
-        }
-    }
-
-    // Check session in database
-    try {
-        const dbSession = await db('sessions')
-            .where('sid', sessionId)
-            .first();
-
-
-        if (dbSession) {
-            // The session data is already an object, no need to parse
-            const sessionData = dbSession.sess;
-
-            // If session exists in database but not in memory, restore it
-            if (!req.session.userId && sessionData.userId) {
-                console.log('Restoring session from database');
-                Object.assign(req.session, {
-                    userId: sessionData.userId,
-                    email: sessionData.email
-                });
-                await new Promise((resolve, reject) => {
-                    req.session.save(err => {
-                        if (err) {
-                            console.error('Error saving restored session:', err);
-                            reject(err);
-                        } else {
-                            console.log('Session restored successfully');
-                            resolve();
-                        }
-                    });
-                });
-            }
-        } else {
-            console.log('No session found in database for ID:', sessionId);
-        }
-    } catch (err) {
-        console.error('Error checking session in database:', err);
-    }
-
+    // If no active session, return unauthorized
     if (!req.session.userId) {
-        console.log('No active session found in memory');
         return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    try {
-        console.log('Session found, fetching user data for:', req.session.userId);
+    // Get fresh user data from database
+    const user = await db('users')
+        .where({ id: req.session.userId })
+        .first();
 
-        // Get fresh user data from database
-        const user = await db('users')
-            .where({ id: req.session.userId })
-            .first();
-
-        if (!user) {
-            console.log('User not found for id:', req.session.userId);
-            // Clear invalid session
-            req.session.destroy();
-            return res.status(401).json({ error: 'User not found' });
-        }
-
-        console.log('User verified successfully:', { id: user.id, email: user.email });
-        res.json({
-            user: {
-                id: user.id,
-                email: user.email
-            }
-        });
-    } catch (error) {
-        console.error('Error verifying session:', error);
-        throw error;
+    if (!user) {
+        // Clear invalid session and return unauthorized
+        req.session.destroy();
+        return res.status(401).json({ error: 'User not found' });
     }
+
+    // Return user data
+    res.json({
+        user: {
+            id: user.id,
+            email: user.email
+        }
+    });
 }));
 
 // Signup route
@@ -166,12 +97,6 @@ router.post('/signup', validateSignup, asyncHandler(async (req, res) => {
 
 // Login route
 router.post('/login', validateLogin, asyncHandler(async (req, res) => {
-    console.log('Login request received:', {
-        email: req.body.email,
-        cookies: req.headers.cookie,
-        sessionID: req.sessionID,
-        headers: req.headers
-    });
 
     // Check for validation errors
     const errors = validationResult(req);
